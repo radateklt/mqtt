@@ -1,0 +1,29 @@
+{
+  "name": "@radatek/microserver",
+  "version": "0.1.0",
+  "description": "HTTP MicroServer",
+  "author": "Darius Kisonas",
+  "license": "MIT",
+  "keywords": [
+    "mqtt",
+    "broker",
+    "mqtt-broker"
+  ],
+  "type": "module",
+  "main": "./dist/mqtt.js",
+  "module": "./dist/mqtt.js",
+  "types": "./dist/mqtt.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/radateklt/mqtt.git"
+  },
+  "scripts": {
+    "build": "pnpm --package typescript dlx tsc -d -m nodenext -t es2021 mqtt.ts --outDir dist && sed -Ei 's/\\\"use strict\\\";\\n\\n//g' dist/mqtt.js && sed -Ei ':a;N;$!ba;s/\\n +private _[^\\n]+//g;s/export \\{\\};//g' dist/mqtt.d.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1"
+  }
+}
