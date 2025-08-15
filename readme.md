@@ -9,7 +9,25 @@ supported MQTT features:
   - puback:
   - subscribe: qos=0-2, rh (Retain Handling), nl (No Local), rap (Retain as Published)
   - unsubscribe:
-  - acl: permissions, topic prefix, init subscriptions, init publications
+  - policies: permissions, topic prefix, init subscriptions, init publications
 
 ### Usage examples:
 
+```ts
+
+const broker = new Broker({
+  listen: 1883,
+  policy: {
+    usr: {
+      prefix: 'devices/$clientId',
+      permissions: {
+        'test': { publish: false, subscribe: false }
+      }
+    }
+  },
+  users: {
+    usr: { policy: 'usr', password: 'psw' }
+  }
+})
+
+```

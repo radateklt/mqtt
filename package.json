@@ -1,7 +1,7 @@
 {
-  "name": "@radatek/microserver",
-  "version": "0.1.0",
-  "description": "HTTP MicroServer",
+  "name": "@radatek/mqtt",
+  "version": "1.1.3",
+  "description": "MQTT Broker",
   "author": "Darius Kisonas",
   "license": "MIT",
   "keywords": [
@@ -10,9 +10,7 @@
     "mqtt-broker"
   ],
   "type": "module",
-  "main": "./dist/mqtt.js",
-  "module": "./dist/mqtt.js",
-  "types": "./dist/mqtt.d.ts",
+  "main": "microdb.ts",
   "files": [
     "dist"
   ],
@@ -21,9 +19,11 @@
     "url": "git+https://github.com/radateklt/mqtt.git"
   },
   "scripts": {
-    "build": "pnpm --package typescript dlx tsc -d -m nodenext -t es2021 mqtt.ts --outDir dist && sed -Ei 's/\\\"use strict\\\";\\n\\n//g' dist/mqtt.js && sed -Ei ':a;N;$!ba;s/\\n +private _[^\\n]+//g;s/export \\{\\};//g' dist/mqtt.d.ts"
+    "build": "pnpm --package typescript dlx tsc -d -m nodenext -t es2021 mqtt.ts --outDir dist && sed -Ei 's/\\\"use strict\\\";\\n\\n//g' dist/mqtt.js && sed -Ei ':a;N;$!ba;s/\\n +private _[^\\n]+//g;s/export \\{\\};//g' dist/mqtt.d.ts",
+    "test": "node test.ts",
+    "publish": "pnpm run build && cp package.json package.json.orig && sed -Ei ':a;N;$!ba;s|\"main\"[^\\n]+|\"main\": \"./dist/mqtt.js\",\\n  \"module\": \"./dist/mqtt.js\",\\n  \"types\": \"./dist/mqtt.d.ts\",|;s|,\\n  \"scripts\".*$|\\n}|' package.json && pnpm publish --access public --no-git-checks; mv package.json.orig package.json"
   },
   "devDependencies": {
-    "@types/node": "^22.14.1"
+    "@types/node": "^24.2.1"
   }
 }

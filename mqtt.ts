@@ -1,20 +1,28 @@
+/**
+ * MQTT Broker
+ * @version 1.1.3
+ * @package @radatek/mqtt
+ * @copyright Darius Kisonas 2023
+ * @license MIT
+ */
+
 import {EventEmitter} from 'events'
 import net from 'net'
 import tls from 'tls'
 import fs from 'fs'
+import { nextTick } from 'process'
 
 const BROKER_VERSION = 'MQTT-Broker'
 
-export enum MQTT_ERROR {
-  UNSPECIFIED = 0x80,
-  MALFORMED_PACKET = 0x81,
-  PROTOCOL = 0x82,
-  CLIENT_IDENTIFIER = 0x85,
-  BAD_USERNAME_PASSWORD = 0x86,
-  NOT_AUTHORIZED = 0x87,
-  MESSAGEID_INUSE = 0x91,
-  IDENTIFER_NOT_FOUND = 0x92
-}
+const ERROR_UNSPECIFIED = 0x80
+const ERROR_MALFORMED_PACKET = 0x81
+const ERROR_PROTOCOL = 0x82
+const ERROR_CLIENT_IDENTIFIER = 0x85
+const ERROR_BAD_USERNAME_PASSWORD = 0x86
+const ERROR_NOT_AUTHORIZED = 0x87
+const ERROR_TOPIC_INVALID = 0x90
+const ERROR_MESSAGEID_INUSE = 0x91
+const ERROR_IDENTIFER_NOT_FOUND = 0x92
 
 /*
 supported MQTT features:
@@ -27,7 +35,7 @@ supported MQTT features:
   policy: permissions, topic prefix, init subscriptions, init publications
 */
 
-declare interface MqttMessage {
+export declare interface MqttMessage {
   protocolVersion?: number
 
   cmd?: string
@@ -67,7 +75,7 @@ declare interface MqttMessage {
   clients?: {[clientId: string]: number} // intern
 }
 
-declare interface MqttSubscription {
+export declare interface MqttSubscription {
   topic: string
   qos?: number
   rh?: number
@@ -75,7 +83,7 @@ declare interface MqttSubscription {
   rap?: boolean
 }
 
-declare interface MqttProperties {
+export declare interface MqttProperties {
   payloadFormatIndicator?: number
   messageExpiryInterval?: number
   contentType?: string
@@ -526,15 +534,14 @@ const MqttEncode: {[id: string]: (msg: MqttMessage, payload: PayloadWriter, mqtt
       let reasonCode: number = msg.reasonCode || msg.returnCode || 0
       switch (reasonCode) {
         case 0:
-        case MQTT_ERROR.UNSPECIFIED:
           break
-        case MQTT_ERROR.PROTOCOL:
+        case ERROR_PROTOCOL:
           reasonCode = 1
           break
-        case MQTT_ERROR.CLIENT_IDENTIFIER:
+        case ERROR_CLIENT_IDENTIFIER:
           reasonCode = 2
           break
-        case MQTT_ERROR.BAD_USERNAME_PASSWORD:
+        case ERROR_BAD_USERNAME_PASSWORD:
           reasonCode = 4
           break
         default:
@@ -984,7 +991,7 @@ export class TopicCollection<T> {
 }
 
 export declare interface AclPermissions {
-  read?: boolean
+  subscribe?: boolean
   publish?: boolean
   retain?: boolean
   id?: string  
@@ -1025,7 +1032,7 @@ export declare interface ClientPolicy {
 
 /** @description Broker-Client
  */
-export class BrokerClient {
+export class BrokerClient extends EventEmitter {
   id: string = ''
   username: string = ''
   group?: string
@@ -1046,7 +1053,6 @@ export class BrokerClient {
   keepAlive?: number
   sessionTimeout?: number
   packetIndex?: number
-  _connecting?: boolean
   broker?: Broker
   maxQueueSize: number = 200
 
@@ -1054,10 +1060,20 @@ export class BrokerClient {
   protected _address?: string
 
   constructor (options?: BrokerClientOptions) {
+    super()
     if (!options?.id)
       this.id = 'client-' + Math.random().toString(16).slice(2)
     Object.assign(this, options || {})
+    this._address = 'intern:' + this.id
     this.subscriptions = []
+    this.on('message', (msg: MqttMessage) => {
+      this.broker?.addStatistics('messagesSent', 1)
+      if (msg.cmd === 'publish' && msg.topic) {
+        this.broker?.addStatistics('publishSent', 1)
+        this.emit('publish', msg.topic, msg.payload)
+        this.emit('topic:' + msg.topic, msg.payload)
+      }
+    })
   }
 
   get clientId (): string {
@@ -1068,19 +1084,13 @@ export class BrokerClient {
     return this._address
   }
   
-  clone (oldClient: BrokerClient): void {}  
-  cleanup(cb?: Function): void {}
-  write (msg: MqttMessage, data: Buffer, cb: (err?: Error) => void): void {}
-  publish (topic: string, payload: any): void {}
-  send (msg: MqttMessage): void {
-    this.broker?.addStatistics('messagesSent', 1)
-    if (msg.cmd === 'publish' && msg.topic) {
-      this.broker?.addStatistics('publishSent', 1)
-      this.publish(msg.topic, msg.payload)
-    }
+  clone (oldClient: BrokerClient): void {
+    this.subscriptions = oldClient.subscriptions
+  }  
+  close (destroy?: boolean): boolean {
+    this.emit('close', destroy)
+    return false
   }
-  
-  close (destroy?: boolean): boolean { return false}
 }
 
 /** @description MQTT-Client
@@ -1088,7 +1098,9 @@ export class BrokerClient {
 export class MqttClient extends BrokerClient {
   protected _queue: MqttMessage[] = []
   protected _queueIndex: number = 0
-  _sending: boolean = false
+  protected _sending: boolean = false
+  protected _close?: boolean = false
+  protected _connecting?: boolean
   protected parser: MqttParser
 
   qosQueue: {
@@ -1110,8 +1122,7 @@ export class MqttClient extends BrokerClient {
 
     const socket: net.Socket | undefined = this.socket
     if (socket) {
-      if (!this._address)
-        this._address = `${socket.remoteAddress}:${socket.remotePort}`
+      this._address = `${socket.remoteAddress}:${socket.remotePort}`
 
       if (this.socket) {
         socket.setTimeout(10000)
@@ -1125,12 +1136,24 @@ export class MqttClient extends BrokerClient {
       }
     }
 
+    this.on('message', (msg: MqttMessage) => {
+      if (!this.socket)
+        return
+      /** send packet to the client */
+      if (this._queue.length >= this.maxQueueSize && msg.topic) {
+        if (!this.cleanup(msg.topic))
+          this.cleanup(0)
+      }
+      this._queue.push(msg)
+      this._send()
+    })
+
     this.parser = new MqttParser()
     this.parser.on('packet', (msg: MqttMessage) => this.process(msg))
     this.parser.on('error', (err: Error) => {
       const dataError = err.message === 'Invalid input'
       if (!this.closing)
-        this.disconnect(dataError ? MQTT_ERROR.MALFORMED_PACKET : MQTT_ERROR.UNSPECIFIED)
+        this.disconnect(dataError ? ERROR_MALFORMED_PACKET : ERROR_UNSPECIFIED)
       if (!dataError)
         this.broker?.emit('error', err)
     })
@@ -1188,25 +1211,10 @@ export class MqttClient extends BrokerClient {
     }
   }
 
-  write (msg: MqttMessage, data: Buffer, cb: (err?: Error) => void): void {
-    if (this.socket)
-      this.socket.write(data, cb)
-    else
-      cb(new Error('Invalid data'))
-  }
-
-  /** send packet to the client */
-  send (msg: MqttMessage): void {
-    if (this._queue.length >= this.maxQueueSize && msg.topic) {
-      if (!this.cleanup(msg.topic))
-        this.cleanup(0)
-    }
-    this._queue.push(msg)
-    this._send()
-  }
-
   private _send (): void {
     const msg = this._queue[this._queueIndex]
+    if (!msg && this._close)
+      this.socket?.end()
     if (!this._sending && msg) {
       this._sending = true
 
@@ -1217,7 +1225,12 @@ export class MqttClient extends BrokerClient {
       
       const data: Buffer = this.parser.generate(fixPayload === msg.payload ? msg : {...msg, payload: fixPayload})
 
-      this.write(msg, data, err => {
+      if (!this.socket) {
+        this._sending = false
+        return
+      }
+
+      this.socket.write(data, err => {
         if (!err) {
           this.broker?.addStatistics('bytesSent', data.length)
           this.broker?.addStatistics('messagesSent', 1)
@@ -1246,10 +1259,14 @@ export class MqttClient extends BrokerClient {
         for (const messageId in this.qosQueue.outbound)
           this._removeQosOutbound(parseInt(messageId))
     }
-
+    super.close(destroy)
     if (!this.socket)
       return false
-    this.socket.end()
+    this._close = true
+    if (!this._sending && !this._queue[this._queueIndex])
+      this.socket.end()
+    else if (!this._sending)
+      this._send()
     this.socket = undefined
     return true
   }
@@ -1285,7 +1302,7 @@ export class MqttClient extends BrokerClient {
             for (hasClients in msgIn.clients)
               break
           if (!hasClients && !origClient.closing) {
-            this.send({ cmd: msgIn.qos === 2 ? 'pubcomp' : 'puback', messageId: origMessageId, reasonCode })
+            this.emit('message', { cmd: msgIn.qos === 2 ? 'pubcomp' : 'puback', messageId: origMessageId, reasonCode })
             delete origClient.qosQueue.inbound[origMessageId]
           }
         }
@@ -1294,7 +1311,7 @@ export class MqttClient extends BrokerClient {
   }
 
   disconnect(reasonCode?: number): void {
-    this.send({ cmd: 'disconnect', reasonCode })
+    this.emit('message', { cmd: 'disconnect', reasonCode })
     this.broker?.closeClient(this)
   }
 
@@ -1313,9 +1330,9 @@ export class MqttClient extends BrokerClient {
     switch (msg.cmd) {
       case 'connect': {
         if (this.auth)
-          return this.disconnect(MQTT_ERROR.PROTOCOL)
+          return this.disconnect(ERROR_PROTOCOL)
         if (!msg.clientId || this.broker.clients.get(msg.clientId)?.intern)
-          return this.disconnect(MQTT_ERROR.CLIENT_IDENTIFIER)
+          return this.disconnect(ERROR_CLIENT_IDENTIFIER)
 
         this._connecting = true
         this.id = msg.clientId
@@ -1329,15 +1346,15 @@ export class MqttClient extends BrokerClient {
         const newClient: boolean = this.broker.addClient(this) || true
 
         if (!this.auth) {
-          this.send({ cmd: 'connack', reasonCode: MQTT_ERROR.BAD_USERNAME_PASSWORD })
-          this.close()
+          this.emit('message', { cmd: 'connack', reasonCode: ERROR_BAD_USERNAME_PASSWORD })
+          nextTick(() => this.close())
           return
         }
         this.socket?.setTimeout((this.keepAlive || 30000) * 5 / 4)
         this.packetIndex = 0
 
         delete this._connecting
-        this.send({ cmd: 'connack', sessionPresent: !newClient, reasonCode: 0 })
+        this.emit('message', { cmd: 'connack', sessionPresent: !newClient, reasonCode: 0 })
         break
       }
       case 'connack':
@@ -1345,10 +1362,10 @@ export class MqttClient extends BrokerClient {
       case 'unsuback':
       case 'pingresp':
       case 'auth':
-        this.disconnect(MQTT_ERROR.PROTOCOL)
+        this.disconnect(ERROR_PROTOCOL)
         break
       case 'pingreq':
-        this.send({ cmd: 'pingresp' })
+        this.emit('message', { cmd: 'pingresp' })
         break
       case 'publish':
       case 'pubrel':
@@ -1357,12 +1374,12 @@ export class MqttClient extends BrokerClient {
           const msgIn = this.qosQueue?.inbound[messageId]
           // check for registered inbound message
           if (!msgIn) {
-            this.send({ cmd: 'pubcomp', messageId, reasonCode: MQTT_ERROR.IDENTIFER_NOT_FOUND })
+            this.emit('message', { cmd: 'pubcomp', messageId, reasonCode: ERROR_IDENTIFER_NOT_FOUND })
             return
           }
           // inbound message is allready released
           if (!msgIn.topic) {
-            this.send({ cmd: 'pubcomp', messageId })
+            this.emit('message', { cmd: 'pubcomp', messageId })
             return
           }
         } else {
@@ -1383,21 +1400,21 @@ export class MqttClient extends BrokerClient {
         break
       case 'pubrec':
         this.cleanup((msg: MqttMessage) => msg.messageId === msg.messageId && msg.cmd === 'publish')
-        this.send({ cmd: 'pubrel', messageId: msg.messageId })
+        this.emit('message', { cmd: 'pubrel', messageId: msg.messageId })
         break
       case 'subscribe':
         granted = []
         msg.subscriptions?.forEach(sub => {
-          granted.push(this.broker?.subscribe(sub, this) ?? MQTT_ERROR.UNSPECIFIED)
+          granted.push(this.broker?.subscribe(sub, this) ?? ERROR_UNSPECIFIED)
         })
-        this.send({ cmd: 'suback', messageId: msg.messageId, granted: granted })
+        this.emit('message', { cmd: 'suback', messageId: msg.messageId, granted: granted })
         break
       case 'unsubscribe':
         granted = []
         msg.unsubscriptions?.forEach(sub => {
-          granted.push(this.broker?.unsubscribe(sub, this) ?? MQTT_ERROR.UNSPECIFIED)
+          granted.push(this.broker?.unsubscribe(sub, this) ?? ERROR_UNSPECIFIED)
         })
-        this.send({ cmd: 'unsuback', messageId: msg.messageId, granted: granted })
+        this.emit('message', { cmd: 'unsuback', messageId: msg.messageId, granted: granted })
         break
       case 'disconnect':
         this.broker?.removeClient(this)
@@ -1476,7 +1493,6 @@ declare interface SubscribersItem {
 export class Broker extends EventEmitter {
   options: BrokerOptions
   startupTime: Date
-  protocols: Function[]
   permissions: TopicCollection<TopicItem>
   subscribers: TopicCollection<SubscribersItem>
   data: TopicCollection<MqttMessage>
@@ -1510,7 +1526,7 @@ export class Broker extends EventEmitter {
       updateStatistics: 60,
       listen: '',
       tls: {},
-      policy: {}, // {default: {prefix:'$username/$clientId', clientId:['prefix'], permissions:{'#':{read:true, publish:false, retain:false}}}
+      policy: {}, // {default: {prefix:'$username/$clientId', clientId:['prefix'], permissions:{'#':{subscribe:true, publish:false, retain:false}}}
       permissions: {}, // {'topic': { retain:true }}
       users: {}, // {'user': {policy: 'default', password:'psw'}}
       log: 0,
@@ -1518,7 +1534,6 @@ export class Broker extends EventEmitter {
     }
 
     this.startupTime = new Date()
-    this.protocols = [this.handler]
     this.permissions = new TopicCollection({})
     this.subscribers = new TopicCollection({ systemFilter: true })
     this.data = new TopicCollection({ systemFilter: true })
@@ -1561,41 +1576,6 @@ export class Broker extends EventEmitter {
     return this
   }
 
-  private _listenHandler (socket: net.Socket | tls.TLSSocket) {
-    const destroy = () => socket.destroy()
-    socket.setTimeout(10000, destroy)
-    socket.on('error', destroy)
-    socket.once('readable', () => {
-      if (!('encrypted' in socket)) {
-        const chunk = socket.read(1)
-
-        socket.unshift(chunk)
-        if (this.options.tls?.cert && chunk[0] === 22) {
-          socket = new tls.TLSSocket(socket, {
-            isServer: true,
-            rejectUnauthorized: false,
-            secureContext: tls.createSecureContext(this.options.tls)
-          })
-        } else {
-          if (this.options.tls?.cert) {
-            socket.destroy()
-            return
-          }
-        }
-      }
-      socket.once('data', data => {
-        socket.off('error', destroy)
-        let i, n
-        for (i = 0, n = this.protocols.length; i < n; i++) {
-          if (this.protocols[i].call(this, socket, data))
-            break
-        }
-        if (i === n)
-          socket.end()
-      })
-    })
-  }
-
   /**
    * Start TCP service
    */
@@ -1608,10 +1588,10 @@ export class Broker extends EventEmitter {
     }
        
     // Start new listeners
-    listen.toString().replace(/((\w+):\/\/)?(([^:,]*):)?([^:,]+)/, (_, __, proto, ___, host, port) => {
-      const srv: net.Server = proto === 'tls' || options?.tls?.cert
-        ? tls.createServer(options?.tls || this.options.tls || {}, (options?.handler || this._listenHandler).bind(this))
-        : net.createServer((options?.handler || this._listenHandler).bind(this))
+    listen.toString().replace(/((\w+):\/\/)?(([^:,]*):)?([^:,]+)/g, (_, __, proto, ___, host, port) => {
+      const srv: net.Server = proto === 'tls' || (!proto && options?.tls?.cert)
+        ? tls.createServer(options?.tls || this.options.tls || {}, (options?.handler || this.handler).bind(this))
+        : net.createServer((options?.handler || this.handler).bind(this))
       const _onerr = (err: Error) => {
         this.emit('error', err, srv)
         srv.close()
@@ -1684,17 +1664,19 @@ export class Broker extends EventEmitter {
   }
 
   /** Close server */
-  close () {
+  async close () {
     if (this.options.log)
       this.emit('log', 'Closing')
+    this.clear()
     clearTimeout(this._updateStatistics)
     this._updateStatistics = undefined
-    this.servers.forEach(srv => srv.close())
-    this.clear()
-    Object.entries(this.modules).forEach(([name, mod]) => {
+    for (const srv of this.servers)
+      await new Promise(resolve => srv.close(resolve))
+    this.servers.splice(0)
+    for (const mod of Object.values(this.modules)) {
       if (mod && mod !== this && mod.close)
-        mod.close()
-    })
+        await mod.close()
+    }
     this.emit('close')
   }
 
@@ -1813,14 +1795,16 @@ export class Broker extends EventEmitter {
         return false
     }
 
-    if (!client.group && client.policy?.group)
+    if (!client.policy)
+      client.policy = {}
+    if (!client.group && client.policy.group)
       client.group = client.policy.group
-    if (!client.prefix && client.policy?.prefix)
+    if (!client.prefix && client.policy.prefix)
       client.prefix = (client.policy.prefix.replace(/\$(\S+)/g, (name: string) => this._subOption(client, name) || '') + '/').replace(/^\/+/, '')
     if (client.prefix && !client.prefix.endsWith('/'))
       client.prefix += '/'
 
-    if (client.policy?.globalPermissions)
+    if (client.policy.globalPermissions)
       Object.entries(client.policy.globalPermissions).forEach(([n, v]) => {
         if (n.startsWith('/'))
           n.substring(1)
@@ -1829,8 +1813,12 @@ export class Broker extends EventEmitter {
         this.permissions.add(n, { ...v, id: client.id })
       })
 
+    if (!client.policy.permissions)
+      client.policy.permissions = {}
     if (client.policy?.permissions && !(client.policy.permissions instanceof TopicCollection)) {
       const col = new TopicCollection<AclPermissions>({ systemFilter: true })
+      if (client.prefix)
+        col.add(client.prefix + '#', { publish: true, subscribe: true })
       for (let n in client.policy.permissions) {
         const perm = client.policy.permissions[n]
         if (n.startsWith('/'))
@@ -1935,7 +1923,7 @@ export class Broker extends EventEmitter {
     if (!this.options.policy.default)
       this.options.policy.default = { prefix: '$username/$clientId' }
     if (!this.options.policy.admin)
-      this.options.policy.admin = { prefix: '', permissions: { '#': { read: true, publish: true } } }
+      this.options.policy.admin = { prefix: '', permissions: { '#': { subscribe: true, publish: true } } }
   }
 
   /** Update users set */
@@ -1974,7 +1962,7 @@ export class Broker extends EventEmitter {
         client.policy = { ...policy }
         client.group = user.group || policy.group
         client.prefix = policy.prefix
-          ? (policy.prefix.replace(/\$(\S+)/g, (name: string) => this._subOption(user, name) || this._subOption(client, name) || '') + '/').replace(/^\/+/, '') : ''
+          ? (policy.prefix.replace(/\$(\S+)/g, (_: string, name: string) => this._subOption(user, name) || this._subOption(client, name) || '') + '/').replace(/^\/+/, '') : ''
       }
     }
     if (!client.auth)
@@ -2023,7 +2011,7 @@ export class Broker extends EventEmitter {
 
   /** fix client topic */
   private _fixTopic (client: BrokerClient, topic: string, permissionId?: string, defaultPermission?: boolean): { topic: string, reasonCode: number } {
-    let reasonCode = client ? MQTT_ERROR.NOT_AUTHORIZED : 0
+    let reasonCode = client ? ERROR_NOT_AUTHORIZED : 0
     if (client && topic) {
       let hasPrefix = false
       if (topic.startsWith('/'))
@@ -2038,9 +2026,9 @@ export class Broker extends EventEmitter {
         (!topic.startsWith('$') ||
           topic.startsWith('$SYS/') ||
           topic.startsWith('$share/') ||
-          topic.indexOf('//') < 0) ? 0 : MQTT_ERROR.NOT_AUTHORIZED
-      if (!reasonCode && permissionId && !hasPrefix)
-        reasonCode = this._permission(client, topic, permissionId, defaultPermission) ? 0 : MQTT_ERROR.NOT_AUTHORIZED
+          topic.indexOf('//') < 0) ? 0 : ERROR_TOPIC_INVALID
+      if (!reasonCode && permissionId)
+        reasonCode = this._permission(client, topic, permissionId, defaultPermission) ? 0 : ERROR_TOPIC_INVALID
     }
     return {
       topic,
@@ -2049,20 +2037,20 @@ export class Broker extends EventEmitter {
   }
 
   /** Process incomming messages
-   * @param {Object} message
+   * @param {Object} msg
    * @param {boolean} intern - used for recursive processing
   */
-  process (message: MqttMessage, intern?: boolean): boolean | undefined {
+  process (msg: MqttMessage, intern?: boolean): boolean | undefined {
     if (intern)
       return true
-    if (message.retain) {
-      const topic = message.topic || ''
+    if (msg.retain) {
+      const topic = msg.topic || ''
       let data = this.data.get(topic)
       if (!data)
         data = this.data.set(topic, { topic, retain: true, qos: 0 })
-      if (data.payload === message.payload)
+      if (data.payload === msg.payload)
         return false
-      data.payload = message.payload
+      data.payload = msg.payload
     }
   }
 
@@ -2083,19 +2071,19 @@ export class Broker extends EventEmitter {
     if (client && !msg.clients) {
       this.statistics.publishReceived++
 
-      ({ topic, reasonCode } = this._fixTopic(client, topic, 'publish'))
+      ({ topic, reasonCode } = this._fixTopic(client, topic, 'publish', true))
       if (!reasonCode)
-        retain = this._permission(client, topic, 'retain', !!retain)
+        retain = this._permission(client, topic, 'retain', retain ?? false)
       if (msg.qos === 2 && client.maximumQos === 2) {
         if (client instanceof MqttClient) {
           if (!reasonCode && client.qosQueue.inbound[msg.messageId || 0])
-            reasonCode = MQTT_ERROR.MESSAGEID_INUSE
+            reasonCode = ERROR_MESSAGEID_INUSE
           if (!reasonCode)
             client.qosQueue.inbound[msg.messageId || 0] = { topic: topic, payload: msg.payload, qos: msg.qos, retain, messageId: msg.messageId || 0, clients: {} }
         }
         if (reasonCode)
           this.statistics.publishDropped++
-        client.send({ cmd: 'pubrec', messageId: msg.messageId, reasonCode })
+        client.emit('message', { cmd: 'pubrec', messageId: msg.messageId, reasonCode })
         return
       }
     }
@@ -2133,7 +2121,7 @@ export class Broker extends EventEmitter {
         const qos = Math.min(sub.qos, processMessage.qos, subClient?.maximumQos || 0)
         if (subClient && !subClient.closing && (subClient.active || qos > 0) && !pubList[sub.id] && (!sub.nl || (client && client.id !== sub.id))) {
           const hasPrefix = subClient.prefix && topic.startsWith(subClient.prefix)
-          if (hasPrefix || this._permission(subClient, topic, 'read')) { // get all prefixed messages by policy, check acl read permission
+          if (hasPrefix || this._permission(subClient, topic, 'subscribe', true)) { // get all prefixed messages by policy, check acl read permission
             let subtopic = processMessage.topic
             if (hasPrefix)
               subtopic = subtopic.substring(subClient.prefix.length)
@@ -2154,7 +2142,7 @@ export class Broker extends EventEmitter {
         const subClient = this.clients.get(id)
         if (!(subClient instanceof MqttClient))
           return
-        subClient.send(message)
+        subClient.emit('message', message)
         if (message.messageId && client?.maximumQos) {
           subClient.qosQueue.outbound[message.messageId || 0] = { qos: message.qos, client: client && { clientId: client.clientId, messageId: msg.messageId } }
           if (!qosClients)
@@ -2169,7 +2157,7 @@ export class Broker extends EventEmitter {
         client.qosQueue.inbound[msg.messageId || 0] = { qos: msg.qos, clients: qosClients }
       } else {
         delete client.qosQueue.inbound[msg.messageId || 0]
-        client.send({ cmd: msg.qos === 2 ? 'pubcomp' : 'puback', messageId: msg.messageId, reasonCode })
+        client.emit('message', { cmd: msg.qos === 2 ? 'pubcomp' : 'puback', messageId: msg.messageId, reasonCode })
       }
     }
   }
@@ -2186,7 +2174,7 @@ export class Broker extends EventEmitter {
       sub = { topic: sub }
     if (client.subscriptions.includes((sub as any).topic))
       return sub.qos || 0
-    const { topic, reasonCode } = this._fixTopic(client, sub.topic, 'read')
+    const { topic, reasonCode } = this._fixTopic(client, sub.topic, 'subscribe', true)
     if (reasonCode)
       return reasonCode
     sub.qos = Math.min(client.policy?.qos !== undefined ? client.policy.qos : 2, sub.qos || 0)
@@ -2207,7 +2195,7 @@ export class Broker extends EventEmitter {
         this.data.iterateWildcard(topic, (pub: MqttMessage) => {
           if (pub.retain) {
             const hasPrefix = client.prefix && topic.startsWith(client.prefix)
-            if (hasPrefix || this._permission(client, topic, 'read')) { // get all prefixed messages by policy, check acl read permission
+            if (hasPrefix || this._permission(client, topic, 'subscribe', true)) { // get all prefixed messages by policy, check acl read permission
               let subtopic: string = pub.topic as string
               if (hasPrefix)
                 subtopic = subtopic.substring(client.prefix.length)
@@ -2216,7 +2204,7 @@ export class Broker extends EventEmitter {
               if (!cb || cb(message) !== false) {
                 if ((this.options.log || 0) > 2)
                   this.emit('log', '> ' + client.id + ' topic:' + message.topic + ' payload:' + message.payload)
-                client.send(message)
+                client.emit('message', message)
               }
             }
           }
@@ -2251,11 +2239,7 @@ export class Broker extends EventEmitter {
     return client?.policy?.permissions instanceof TopicCollection ? client.policy.permissions.getOption(topic, permissionId, acl) : acl
   }
 
-  /** mqtt protocol handler */
-  handler (socket: net.Socket, data: Buffer) {
-    if (data && data[0] !== 0x10) // first packet is allways connect
-      return
+  handler (socket: net.Socket) {
     new MqttClient({broker: this, socket})
-    return true
   }
 }
