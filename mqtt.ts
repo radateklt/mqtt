@@ -1,6 +1,6 @@
 /**
  * MQTT Broker/Connection
- * @version 1.2.0
+ * @version 1.2.1
  * @package @radatek/mqtt
  * @copyright Darius Kisonas 2023
  * @license MIT

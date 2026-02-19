@@ -1,6 +1,6 @@
 {
   "name": "@radatek/mqtt",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "MQTT Broker and Client",
   "author": "Darius Kisonas",
   "license": "MIT",
@@ -11,7 +11,7 @@
     "mqtt-client"
   ],
   "type": "module",
-  "main": "microdb.ts",
+  "main": "mqtt.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/radateklt/mqtt.git"
