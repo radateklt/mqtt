@@ -6,21 +6,21 @@ const test: {
   mode: (mode: 'stop' | 'continue') => void
   after: (fn: Function) => void
   run: () => Promise<void>
-} = global.test = (() => {
+} = ((global: any) => {
   let tests: {name: string, fn?: Function}[] = [], _mode: 'stop' | 'skip' | 'continue' = 'continue', _skip: boolean, _run: boolean, _after: Function | undefined
   const test = (name: string, fn?: Function) => {
     tests.push({ name, fn })
     !_run && tests.length === 1 && process.nextTick(test.run)
   }
-  test.skip = (name: string, ...args: any) => name ? test(name) : _skip = true
+  test.skip = (name: string, ...args: any[]) => name ? test(name) : _skip = true
   test.mode = (mode: 'stop' | 'skip' | 'continue') => _mode = mode
   test.after = (fn: Function) => _after = fn
   test.run = async () => {
     if (_run) return
-    _run = true
     const {log, error, warn} = console
+    _run = true
     let count = 0, fail = 0, lastError: Error | undefined 
-    const after = async () => { try { await _after?.() } catch (e) { error(e.stack) } _after = undefined }
+    const after = async () => { try { await _after?.() } catch (e: any) { error(e.stack) } _after = undefined }
     const run = async (prefix: string) => {
       for (const {name, fn} of tests) {
         const stime = performance.now(), out = (pre: string, msg?: string, post?: string) => log(`${prefix}\x1b[${pre} ${name}${msg?': '+msg:''}\x1b[90m (${post||(performance.now() - stime).toFixed(1)+'ms'})\x1b[0m`)
@@ -42,7 +42,7 @@ const test: {
             lastError = undefined
           } else
             out('32m✔')
-        } catch (e) {
+        } catch (e: any) {
           fail++
           out('31m✘', e.message)
           e.name !== 'AssertionError' && error(e.stack);
@@ -56,16 +56,15 @@ const test: {
     tests.length && await run('');
     _run = false
     if (count) {
-      const l = '—'.repeat(16)+'\n'
+      const ignRes = ['CloseReq', 'PipeWrap', 'TTYWrap', 'FSReqCallback']
+      const l = '—'.repeat(16)+'\n', res = process.getActiveResourcesInfo().filter(n => !ignRes.includes(n))
       log(`\x1b[${fail?'33m'+l+'✘':'32m'+l+'✔'} ${count-fail}/${count} ${fail?'FAILED':'SUCCESS'}\x1b[0m`)
-      setTimeout(() => {
-        warn('Active resources:', ...process.getActiveResourcesInfo().filter(n => n !== 'CloseReq' && !n.endsWith('Wrap')))
-        process.exit(1)
-      }, 1000).unref()
+      res.length && warn('Active resources:', ...res)
+      res.length && setTimeout(() => process.exit(1), 1000).unref()
     }
   }
-  return test
-})()
+  return global.test = test
+})(global)
 
 import { Broker, BrokerClient, MqttParser, MqttGenerator } from './mqtt.ts'
 import type { MqttMessage, BrokerOptions } from './mqtt.ts'
@@ -184,8 +183,8 @@ const broker = new Broker(config)
 
 class MqttConn {
   socket: net.Socket | tls.TLSSocket | undefined
-  result: any[]
-  parser: MqttParser
+  result!: any[]
+  parser!: MqttParser
   secure: boolean = false
 
   async connect (object?: any) {
@@ -268,7 +267,7 @@ class MqttConn {
       this.parser.on('packet', func)
     })
   }
-  send (object) {
+  send (object: any) {
     return new Promise((resolve, reject) => {
       if (!this.socket)
         reject(new Error('Not connected'))

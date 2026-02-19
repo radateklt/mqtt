@@ -1,29 +1,31 @@
 {
   "name": "@radatek/mqtt",
-  "version": "1.1.3",
-  "description": "MQTT Broker",
+  "version": "1.2.0",
+  "description": "MQTT Broker and Client",
   "author": "Darius Kisonas",
   "license": "MIT",
   "keywords": [
     "mqtt",
     "broker",
-    "mqtt-broker"
+    "mqtt-broker",
+    "mqtt-client"
   ],
   "type": "module",
   "main": "microdb.ts",
-  "files": [
-    "dist"
-  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/radateklt/mqtt.git"
   },
   "scripts": {
-    "build": "pnpm --package typescript dlx tsc -d -m nodenext -t es2021 mqtt.ts --outDir dist && sed -Ei 's/\\\"use strict\\\";\\n\\n//g' dist/mqtt.js && sed -Ei ':a;N;$!ba;s/\\n +private _[^\\n]+//g;s/export \\{\\};//g' dist/mqtt.d.ts",
+    "build": "pnpm --package typescript dlx tsc -d -m nodenext -t es2023 mqtt.ts --stripInternal --outDir dist && sed -E ':a;N;$!ba;s|\"main\":\\s*\"([^\"]+)\\.ts\"[^\\n]*|\"main\": \"\\1.js\",\\n  \"module\": \"\\1.js\",\\n  \"types\": \"\\1.d.ts\",|;s|,\\n  \"scripts\".*$|\\n}|' package.json > dist/package.json && cp README.md dist/",
     "test": "node test.ts",
-    "publish": "pnpm run build && cp package.json package.json.orig && sed -Ei ':a;N;$!ba;s|\"main\"[^\\n]+|\"main\": \"./dist/mqtt.js\",\\n  \"module\": \"./dist/mqtt.js\",\\n  \"types\": \"./dist/mqtt.d.ts\",|;s|,\\n  \"scripts\".*$|\\n}|' package.json && pnpm publish --access public --no-git-checks; mv package.json.orig package.json"
+    "prepublishOnly": "pnpm build"
+  },
+  "publishConfig": {
+    "directory": "dist",
+    "access": "public"
   },
   "devDependencies": {
-    "@types/node": "^24.2.1"
+    "@types/node": "^25.3.0"
   }
 }
