@@ -1,6 +1,6 @@
 /**
  * MQTT Broker/Connection
- * @version 1.2.1
+ * @version 1.2.2
  * @package @radatek/mqtt
  * @copyright Darius Kisonas 2023
  * @license MIT
@@ -35,7 +35,7 @@ supported MQTT Broker features:
   policy: permissions, topic prefix, init subscriptions, init publications
 */
 
-export declare interface MqttMessage {
+export interface MqttMessage {
   // @ connect, disconnect
   protocolVersion?: number
   /** all */
@@ -98,7 +98,7 @@ export declare interface MqttMessage {
   clients?: {[clientId: string]: number}
 }
 
-export declare interface ConnectMessage {
+export interface ConnectMessage {
   protocolVersion?: number
 
   protocol?: string
@@ -119,17 +119,17 @@ export declare interface ConnectMessage {
   properties?: MqttProperties
 }
 
-export declare interface PublishMessage {
+export interface PublishMessage {
   messageId?: number
-  topic?: string
-  payload?: any
+  topic: string
+  payload: any
   dup?: boolean
-  qos?: number
+  qos: number
   retain?: boolean
   intern?: boolean
 }
 
-export declare interface MqttSubscription {
+export interface MqttSubscription {
   topic: string
   qos?: number
   rh?: number
@@ -137,7 +137,7 @@ export declare interface MqttSubscription {
   rap?: boolean
 }
 
-export declare interface MqttProperties {
+export interface MqttProperties {
   payloadFormatIndicator?: number
   messageExpiryInterval?: number
   contentType?: string
@@ -859,22 +859,22 @@ export class MqttParser extends EventEmitter {
   }
 }
 
-export declare interface TopicCollectionOptions {
+export interface TopicCollectionOptions {
   maxItems?: number
   maxSubscriptions?: number
   systemFilter?: boolean
 }
 
-export declare interface TopicItem {
+export interface TopicItem {
   id?: string
   qos?: number
   publish?: boolean
   retain?: boolean
   topic?: string
-  //payload?: string | Buffer | number
+  payload?: string | Buffer | number
 }
 
-export declare interface TopicSubscription<T> {
+export interface TopicSubscription<T> {
   topic?: string
   items?: T[]
   sub?: {[key: string]: TopicSubscription<T>}
@@ -987,7 +987,7 @@ export class TopicCollection<T> {
       if (sub && name) {
         if (name === '#') {
           // iterate all
-          if (sub.items && sub.items.some((item: T) => cb(item, sub.topic || '')))
+          if (sub.items && sub.items.some((item: T) => cb(item, sub.topic || '') === true))
             return true
         }
         if (sub.sub) {
@@ -1005,7 +1005,7 @@ export class TopicCollection<T> {
     }
     if (sub) {
       if (sub.items)
-        sub.items.some((item: T) => cb(item, topic))
+        sub.items.some((item: T) => cb(item, topic) === true)
     } else {
       if (!topic.match(/[+#]/))
         return
@@ -1015,7 +1015,7 @@ export class TopicCollection<T> {
   }
 
   /** Iterate all items */
-  iterate (topic: string, cb: (item: T, topic?: string) => boolean): boolean {
+  iterate (topic: string, cb: (item: T, topic?: string) => boolean | void): boolean {
     if (topic.startsWith('/'))
       topic = topic.slice(1)
     const internal = this.options.systemFilter && topic.startsWith('$') // skip wildcard on $... topics
@@ -1024,7 +1024,7 @@ export class TopicCollection<T> {
       if (sub) {
         const name = topicList[idx]
         if (name === undefined)
-          return sub.items?.some?.(item => cb(item, topic)) || false
+          return sub.items?.some?.(item => cb(item, topic) === true) || false
         if (sub.sub) {
           if (!internal || sub !== this.sub)
             iter(sub.sub['#'], -1)
@@ -1052,14 +1052,14 @@ export class TopicCollection<T> {
   }
 }
 
-export declare interface AclPermissions {
+export interface AclPermissions {
   subscribe?: boolean
   publish?: boolean
   retain?: boolean
   id?: string  
 }
 
-export declare interface BrokerClientOptions {
+export interface BrokerClientOptions {
   id?: string
   username?: string
   auth?: boolean
@@ -1081,9 +1081,9 @@ export declare interface BrokerClientOptions {
   maxQueueSize?: number
 }
 
-export declare interface ClientPolicy {
+export interface ClientPolicy {
   clientId?: string | string[]
-  subscriptions?: string[] | {[topic: string]: (message: PublishMessage, client: BrokerClient | undefined) => boolean}
+  subscriptions?: string[] | {[topic: string]: (message: MqttMessage, client: BrokerClient | undefined) => boolean}
   publications?: PublishMessage[]
   permissions?: {[topic: string]: AclPermissions} | TopicCollection<AclPermissions>
   globalPermissions?: {[topic: string]: AclPermissions}
@@ -1451,6 +1451,7 @@ export class MqttBrokerClient extends BrokerClient {
             this.emit('message', { cmd: 'pubcomp', messageId })
             return
           }
+          msg = msgIn
         } else {
           if (msg.payload instanceof Buffer)
             msg.payload = msg.payload.toString('utf8')
@@ -1462,7 +1463,7 @@ export class MqttBrokerClient extends BrokerClient {
           if (typeof msg.payload === 'string' && /^-?\d+(\.\d+)?$/.test(msg.payload))
             msg.payload = parseFloat(msg.payload)
         }
-        this.broker.publish(msg, this)
+        this.broker.publish(msg as PublishMessage, this)
         break
       case 'puback':
         this._removeQosOutbound(msg.messageId || 0)
@@ -1497,7 +1498,7 @@ export class MqttBrokerClient extends BrokerClient {
   }
 }
 
-export declare interface PolicyOptions {
+export interface PolicyOptions {
   /** client id list with regex pattern */
   clientId?: string[]
   /** wildcard permissions for topics */
@@ -1506,7 +1507,7 @@ export declare interface PolicyOptions {
   prefix?: string
 }
 
-export declare interface UserInfo {
+export interface UserInfo {
   /** policy id */
   policy: string
   /** user group */
@@ -1515,7 +1516,7 @@ export declare interface UserInfo {
   password?: string | ((usr: string, psw?: string, client?: BrokerClient) => Promise<boolean>)
 }
 
-export declare interface BrokerOptions {
+export interface BrokerOptions {
   /** broker version string */
   version?: string
   /** connection timeout in seconds */
@@ -1544,7 +1545,7 @@ export declare interface BrokerOptions {
   handler?: (socket: net.Socket) => void
 }
 
-declare interface BrokerStatistics {
+interface BrokerStatistics {
   clientsDisconnected: number
   clientsMax: number
   bytesReceived: number
@@ -1569,12 +1570,12 @@ interface BrokerEvents {
   [key: `topic:${string}`]: (message: PublishMessage, client?: BrokerClient) => void
 }
 
-declare interface SubscribersItem {
+interface SubscribersItem {
   id: string
   qos: number
   nl?: boolean
   rap: boolean
-  cb?: (messgae: PublishMessage, client: BrokerClient | undefined) => boolean
+  cb?: (messgae: PublishMessage, client: BrokerClient | undefined) => boolean | void
 }
 
 /** MQTT-Broker server */
@@ -2021,7 +2022,7 @@ export class Broker extends EventEmitter {
         this.emit('log', `CLOSE ${client.id}`)
 
       if (client.will?.topic)
-        this.publish(client.will, client)
+        this.publish(client.will as PublishMessage, client)
 
       this.emit('clients/close', { clientId: client.clientId, username: client.username, address: client.address })
 
@@ -2067,7 +2068,7 @@ export class Broker extends EventEmitter {
       const topic = msg.topic || ''
       let data = this.data.get(topic)
       if (!data)
-        data = this.data.set(topic, { topic, retain: true, qos: 0 })
+        data = this.data.set(topic, { topic, retain: true, qos: 0, payload: undefined })
       if (data.payload === msg.payload)
         return false
       data.payload = msg.payload
@@ -2075,7 +2076,7 @@ export class Broker extends EventEmitter {
   }
 
   /** Publish message */
-  publish (msg: PublishMessage, client?: BrokerClient) {
+  publish (msg: Partial<PublishMessage> & Pick<PublishMessage, 'topic' | 'payload'>, client?: BrokerClient) {
     let topic: string = msg.topic as string, reasonCode = 0, retain = msg.retain
 
     // if client is intern, can publish qos>0, receive only qos=0
@@ -2138,16 +2139,15 @@ export class Broker extends EventEmitter {
             let subtopic = processMessage.topic
             if (hasPrefix)
               subtopic = subtopic.substring(subClient.prefix.length)
-            const message = { cmd: 'publish', qos, reference: processMessage.topic, topic: subtopic, payload: processMessage.payload, retain: sub.rap ? msg.retain : false }
+            const message: PublishMessage & { cmd: string, reference: string } = { cmd: 'publish', qos, reference: processMessage.topic, topic: subtopic, payload: processMessage.payload, retain: sub.rap ? msg.retain : false }
             if (sub.cb && sub.cb(message, client) === false) {
               pubList = {}
-              return false
+              return true
             } else {
               pubList[sub.id] = message
             }
           }
         }
-        return false
       })
       Object.entries(pubList).forEach(([id, message]) => {
         if ((this.options.log || 0) > 2)
@@ -2176,7 +2176,7 @@ export class Broker extends EventEmitter {
   }
 
   /** subscribe single client topic */
-  subscribe (sub: { topic: string, qos?: number, rh?: number, nl?: boolean, rap?: boolean } | string, client: BrokerClient, cb?: (message: MqttMessage, client: BrokerClient | undefined) => boolean): number {
+  subscribe (sub: { topic: string, qos?: number, rh?: number, nl?: boolean, rap?: boolean } | string, client: BrokerClient, cb?: (message: PublishMessage, client: BrokerClient | undefined) => boolean | void): number {
     if (typeof sub === 'string')
       sub = { topic: sub }
     if (client.subscriptions.includes((sub as any).topic))
@@ -2306,7 +2306,7 @@ interface MqttConnectionEvents {
   [key: `topic:${string}`]: (payload: string | Buffer, retain?: boolean) => void
 }
 
-declare interface MqttConnectionSubscription {
+interface MqttConnectionSubscription {
   qos: number;
   cb?: (messgae: MqttMessage) => void;
 }
@@ -2372,7 +2372,7 @@ export class MqttConnection extends EventEmitter {
           if (message.qos === 2)
             this._send({ cmd: 'pubrec', messageId: message.messageId })
 
-          this._subscribtions.iterate(message.topic!, (sub: MqttConnectionSubscription) => (sub.cb?.(message), true))
+          this._subscribtions.iterate(message.topic!, (sub: MqttConnectionSubscription) => (sub.cb?.(message),false))
           this.emit('publish', message)
           this.emit(`topic:${message.topic}`, message.payload as string | Buffer, message.retain)
           break
