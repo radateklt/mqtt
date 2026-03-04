@@ -1,6 +1,6 @@
 /**
  * MQTT Broker/Connection
- * @version 1.2.2
+ * @version 1.2.3
  * @package @radatek/mqtt
  * @copyright Darius Kisonas 2023
  * @license MIT
@@ -2075,6 +2075,21 @@ export class Broker extends EventEmitter {
     }
   }
 
+  /** Publish message to client */
+  publishTo (msg: PublishMessage, clientTo: BrokerClient, clientFrom?: BrokerClient, options?: { qos?: number, ignoreAcl?: boolean }): boolean {
+    if (!clientTo || clientTo.closing || !clientTo.active) return false
+    const hasPrefix = clientTo.prefix && msg.topic.startsWith(clientTo.prefix)
+    if (!hasPrefix && !options?.ignoreAcl && !this._permission(clientTo, msg.topic, 'subscribe', true))
+      return false
+    let subtopic = msg.topic
+    if (hasPrefix)
+      subtopic = subtopic.substring(clientTo.prefix.length)
+    const payload = typeof msg.payload === 'object' && msg.payload instanceof Buffer ? JSON.stringify(msg.payload) : msg.payload
+    const message: PublishMessage & { cmd: string, reference: string } = { cmd: 'publish', qos: options?.qos || 0, reference: msg.topic, topic: subtopic, payload, retain: msg.retain }
+    clientTo.emit('message', message)
+    return true
+  }
+  
   /** Publish message */
   publish (msg: Partial<PublishMessage> & Pick<PublishMessage, 'topic' | 'payload'>, client?: BrokerClient) {
     let topic: string = msg.topic as string, reasonCode = 0, retain = msg.retain

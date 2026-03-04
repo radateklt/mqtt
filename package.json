@@ -1,6 +1,6 @@
 {
   "name": "@radatek/mqtt",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "MQTT Broker and Client",
   "author": "Darius Kisonas",
   "license": "MIT",
@@ -14,7 +14,7 @@
   "main": "mqtt.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/radateklt/mqtt.git"
+    "url": "https://github.com/radateklt/mqtt.git"
   },
   "scripts": {
     "build": "pnpm --package typescript dlx tsc -d -m nodenext -t es2023 mqtt.ts --stripInternal --outDir dist && sed -E ':a;N;$!ba;s|\"main\":\\s*\"([^\"]+)\\.ts\"[^\\n]*|\"main\": \"\\1.js\",\\n  \"module\": \"\\1.js\",\\n  \"types\": \"\\1.d.ts\",|;s|,\\n  \"scripts\".*$|\\n}|' package.json > dist/package.json && cp README.md dist/",
@@ -26,6 +26,6 @@
     "access": "public"
   },
   "devDependencies": {
-    "@types/node": "^25.3.0"
+    "@types/node": "^25.3.3"
   }
 }
