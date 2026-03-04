@@ -1,6 +1,6 @@
 {
   "name": "@radatek/mqtt",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "MQTT Broker and Client",
   "author": "Darius Kisonas",
   "license": "MIT",

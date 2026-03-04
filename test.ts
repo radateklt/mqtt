@@ -124,16 +124,16 @@ test('parse/generate', () => {
   }
   mqttMessages.forEach(([cmd, msg5, msg4, obj]) => {
     let msg = mqttParse(5, msg5, cmd)
-    assert(msg.cmd === cmd, 'Failed parse v5 ' + cmd)
+    assert.equal(msg.cmd, cmd, 'Failed parse v5 ' + cmd)
     assert.deepEqual(msg, obj, 'Failed parse v5 ' + cmd)
     assert.deepEqual(mqttParse(5, mqttGenerate(5, msg, cmd), cmd), obj, 'Failed generate v5 ' + cmd)
     if (msg4) {
       msg = mqttParse(4, msg4, cmd)
-      assert(msg4 === mqttGenerate(4, msg, cmd), 'Failed parse v4 ' + cmd)
+      assert.equal(msg4, mqttGenerate(4, msg, cmd), 'Failed parse v4 ' + cmd)
       msg = mqttParse(5, msg5, cmd)
       if (msg.cmd === 'connect')
         msg.protocolVersion = 4
-      assert(msg4 === mqttGenerate(4, msg, cmd), 'Failed generate v4 ' + cmd)
+      assert.equal(msg4, mqttGenerate(4, msg, cmd), 'Failed generate v4 ' + cmd)
     }
   })
 })
@@ -211,8 +211,7 @@ class MqttConn {
         }, cb)
       else
         this.socket = socket = net.connect({ port, host: '127.0.0.1', timeout }, cb)
-      this.socket.setTimeout(timeout)
-      socket.on('timeout', () => {
+      socket.setTimeout(timeout, () => {
         if (this.socket === socket) {
           this.parser.emit('packet', { cmd: 'timeout' })
           this.socket?.destroy()
@@ -290,6 +289,12 @@ const mqtt = new MqttConn()
 /// //////////////////////////////////////////////////////////////////////////
 test.mode('stop')
 test('mqtt-broker', async () => {
+  test('ready', async () => {
+    let resolve: any
+    const promise = new Promise(res => resolve = res)
+    broker.once('ready', resolve)
+    await promise
+  })
   test('auth', async () => {
     const client = new BrokerClient({username: 'usr', id: 'test'})
     const err = await broker.auth(client, 'psw').then(() => {}).catch(e => e.message)

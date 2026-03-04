@@ -1,6 +1,6 @@
 /**
  * MQTT Broker/Connection
- * @version 1.2.4
+ * @version 1.2.5
  * @package @radatek/mqtt
  * @copyright Darius Kisonas 2023
  * @license MIT
@@ -675,7 +675,7 @@ const MqttEncode: {[id: string]: (msg: MqttMessage, payload: PayloadWriter, mqtt
       if (typeof sub === 'string')
         sub = {topic: sub, qos: msg.qos || 0, rap: msg.retain}
       payload._addString(sub.topic || '')
-      payload._addUInt8((sub.qos || 0) | (sub.rh || 0) << 4 | (sub.rap ? 8 : 0) | (sub.nl || sub.nl === undefined ? 4 : 0))
+      payload._addUInt8((sub.qos || 0) | (mqtt5 ? (sub.rh || 0) << 4 | (sub.rap ? 8 : 0) | (sub.nl || sub.nl === undefined ? 4 : 0) : 0))
     })
   },
   suback(msg: MqttMessage, payload: PayloadWriter, mqtt5: boolean): void {
@@ -1183,7 +1183,7 @@ export class MqttBrokerClient extends BrokerClient {
     if (!this.broker)
       throw new Error('Broker is not set')
 
-    const socket: net.Socket | undefined = this.socket
+    const socket: net.Socket | undefined = this.socket = options.socket
     if (socket) {
       this.address = `${socket.remoteAddress}:${socket.remotePort}`
 
