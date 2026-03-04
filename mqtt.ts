@@ -1,6 +1,6 @@
 /**
  * MQTT Broker/Connection
- * @version 1.2.3
+ * @version 1.2.4
  * @package @radatek/mqtt
  * @copyright Darius Kisonas 2023
  * @license MIT
@@ -124,7 +124,7 @@ export interface PublishMessage {
   topic: string
   payload: any
   dup?: boolean
-  qos: number
+  qos?: number
   retain?: boolean
   intern?: boolean
 }
@@ -482,7 +482,7 @@ const MqttDecode: {[id: string]: (msg: MqttMessage, payload: PayloadReader, mqtt
       msg.subscriptions.push({
         topic,
         qos: flag & 3,
-        nl: !!(flag & 4),
+        nl: mqtt5 ? !!(flag & 4) : true,
         rap: !!(flag & 8),
         rh: (flag >> 4) & 3
       })
@@ -675,7 +675,7 @@ const MqttEncode: {[id: string]: (msg: MqttMessage, payload: PayloadWriter, mqtt
       if (typeof sub === 'string')
         sub = {topic: sub, qos: msg.qos || 0, rap: msg.retain}
       payload._addString(sub.topic || '')
-      payload._addUInt8((sub.qos || 0) | (sub.rh || 0) << 4 | (sub.rap ? 8 : 0) | (sub.nl ? 4 : 0))
+      payload._addUInt8((sub.qos || 0) | (sub.rh || 0) << 4 | (sub.rap ? 8 : 0) | (sub.nl || sub.nl === undefined ? 4 : 0))
     })
   },
   suback(msg: MqttMessage, payload: PayloadWriter, mqtt5: boolean): void {
@@ -1109,7 +1109,6 @@ export class BrokerClient extends EventEmitter {
   writeTime: Date = new Date()
   policy?: ClientPolicy
   maximumQos: number = 0
-  socket?: net.Socket
   clean?: boolean
   closing?: boolean
   keepAlive?: number
@@ -1165,6 +1164,7 @@ export class MqttBrokerClient extends BrokerClient {
   private _connecting?: boolean
   // @internal
   private _parser: MqttParser
+  socket?: net.Socket
 
   qosQueue: {
     inbound: {[messageId: string]: MqttMessage},
@@ -1566,8 +1566,8 @@ interface BrokerEvents {
   'clients/connect': (connInfo: { clientId: string, username: string, address: string }) => void
   'clients/disconnect': (connInfo: { clientId: string, username: string, address: string }) => void
   'clients/close': (connInfo: { clientId: string, username: string, address: string }) => void
-  publish: (message: PublishMessage, client?: BrokerClient) => void
-  [key: `topic:${string}`]: (message: PublishMessage, client?: BrokerClient) => void
+  publish: <T extends BrokerClient>(message: PublishMessage, client?: T) => void
+  [key: `topic:${string}`]: <T extends BrokerClient>(message: PublishMessage, client?: T) => void
 }
 
 interface SubscribersItem {
@@ -1575,7 +1575,7 @@ interface SubscribersItem {
   qos: number
   nl?: boolean
   rap: boolean
-  cb?: (messgae: PublishMessage, client: BrokerClient | undefined) => boolean | void
+  cb?: <T extends BrokerClient>(messgae: PublishMessage, client: T | undefined) => boolean | void
 }
 
 /** MQTT-Broker server */
@@ -1772,8 +1772,10 @@ export class Broker extends EventEmitter {
     this.subscribers.clear()
     this.data.clear()
     for (const [id, client] of this.clients.entries()) {
-      if (client.socket)
-        client.socket.destroy()
+      if (!client.closing) {
+        client.closing = true
+        client.close(true)
+      }
     }
     this.clients.clear()
 
@@ -1792,8 +1794,8 @@ export class Broker extends EventEmitter {
   }
 
   /** Get client by id */
-  getClient(id: string): BrokerClient | undefined {
-    return this.clients.get(id)
+  getClient<T extends BrokerClient>(id: string): T | undefined {
+    return this.clients.get(id) as T
   }
 
   /** Add client to the broker */
@@ -1953,7 +1955,7 @@ export class Broker extends EventEmitter {
   }
 
   /** Authorize user */
-  async auth (client: BrokerClient, password: string): Promise<BrokerClient> {
+  async auth <T extends BrokerClient>(client: T, password: string): Promise<T> {
     let user: UserInfo | undefined
     let policy: ClientPolicy | undefined
 
@@ -2007,7 +2009,8 @@ export class Broker extends EventEmitter {
 
   /** close client connection */
   closeClient (client: BrokerClient) {
-    if (client.close() && client.auth) {
+    if (!client.closing && client.close() && client.auth) {
+      client.closing = true
       const timeout: number = client.sessionTimeout || 0
       if (timeout)
         this._expire.set(client, setTimeout(() => {
@@ -2076,7 +2079,7 @@ export class Broker extends EventEmitter {
   }
 
   /** Publish message to client */
-  publishTo (msg: PublishMessage, clientTo: BrokerClient, clientFrom?: BrokerClient, options?: { qos?: number, ignoreAcl?: boolean }): boolean {
+  publishTo (msg: Partial<PublishMessage> & Pick<PublishMessage, 'topic' | 'payload'>, clientTo: BrokerClient, clientFrom?: BrokerClient, options?: { qos?: number, ignoreAcl?: boolean }): boolean {
     if (!clientTo || clientTo.closing || !clientTo.active) return false
     const hasPrefix = clientTo.prefix && msg.topic.startsWith(clientTo.prefix)
     if (!hasPrefix && !options?.ignoreAcl && !this._permission(clientTo, msg.topic, 'subscribe', true))
@@ -2148,7 +2151,7 @@ export class Broker extends EventEmitter {
       this.subscribers.iterate(topic, (sub: SubscribersItem) => {
         const subClient = this.clients.get(sub.id)
         const qos = Math.min(sub.qos, processMessage.qos, subClient?.maximumQos || 0)
-        if (subClient && !subClient.closing && (subClient.active || qos > 0) && !pubList[sub.id] && (!sub.nl || (client && client.id !== sub.id))) {
+        if (subClient && !subClient.closing && (subClient.active || qos > 0) && !pubList[sub.id] && (!sub.nl || client?.id !== sub.id)) {
           const hasPrefix = subClient.prefix && topic.startsWith(subClient.prefix)
           if (hasPrefix || this._permission(subClient, topic, 'subscribe', true)) { // get all prefixed messages by policy, check acl read permission
             let subtopic = processMessage.topic
@@ -2191,7 +2194,7 @@ export class Broker extends EventEmitter {
   }
 
   /** subscribe single client topic */
-  subscribe (sub: { topic: string, qos?: number, rh?: number, nl?: boolean, rap?: boolean } | string, client: BrokerClient, cb?: (message: PublishMessage, client: BrokerClient | undefined) => boolean | void): number {
+  subscribe (sub: { topic: string, qos?: number, rh?: number, nl?: boolean, rap?: boolean } | string, client: BrokerClient, cb?: <T extends BrokerClient>(message: PublishMessage, client: T | undefined) => boolean | void): number {
     if (typeof sub === 'string')
       sub = { topic: sub }
     if (client.subscriptions.includes((sub as any).topic))
