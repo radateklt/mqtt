@@ -1,6 +1,6 @@
 /**
  * MQTT Broker/Connection
- * @version 1.2.6
+ * @version 1.2.7
  * @package @radatek/mqtt
  * @copyright Darius Kisonas 2023
  * @license MIT
@@ -975,19 +975,21 @@ export class TopicCollection<T> {
   }
 
   /** Iterate items using topic wildcard: # - all items and subitems, + - all items the same level */
-  iterateWildcard (topic: string, cb: (item: T, topic: string) => boolean) {
+  iterateWildcard (topic: string, cb: (item: T, topic: string) => boolean | void): boolean {
     if (topic.startsWith('/'))
       topic = topic.slice(1)
     const sub = this.all[topic]
     const systemFilter = this.options.systemFilter // skip wildcard on $... topics
     let topicList: string[]
-    function iter (sub: TopicSubscription<T>, idx: number): boolean {
+    const iter = (sub: TopicSubscription<T>, idx: number): boolean => {
       const name = topicList[idx]
       if (sub && name) {
         if (name === '#') {
           // iterate all
-          if (sub.items && sub.items.some((item: T) => cb(item, sub.topic || '') === true))
-            return true
+          if (sub.items)
+            for (const item of sub.items)
+              if (cb(item, sub.topic || ''))
+                return true
         }
         if (sub.sub) {
           if (name === '#' || name === '+') {
@@ -1004,13 +1006,15 @@ export class TopicCollection<T> {
     }
     if (sub) {
       if (sub.items)
-        sub.items.some((item: T) => cb(item, topic) === true)
-    } else {
-      if (!topic.match(/[+#]/))
-        return
-      topicList = topic.split('/')
-      iter(this.sub, 0)
+        for (const item of sub.items)
+          if (cb(item, topic) === true)
+            return true
+      return false
     }
+    if (!topic.match(/[+#]/))
+      return false
+    topicList = topic.split('/')
+    return iter(this.sub, 0)
   }
 
   /** Iterate all items */
@@ -1022,8 +1026,13 @@ export class TopicCollection<T> {
     const iter = (sub: TopicSubscription<T>, idx: number): boolean => {
       if (sub) {
         const name = topicList[idx]
-        if (name === undefined)
-          return sub.items?.some?.(item => cb(item, topic) === true) || false
+        if (name === undefined) {
+          if (sub.items)
+            for (const item of sub.items)
+              if (cb(item, topic))
+                return true
+          return false
+        }
         if (sub.sub) {
           if (!internal || sub !== this.sub)
             iter(sub.sub['#'], -1)
@@ -2093,7 +2102,7 @@ export class Broker extends EventEmitter {
   }
   
   /** Publish message */
-  publish (msg: Partial<PublishMessage> & Pick<PublishMessage, 'topic' | 'payload'>, client?: BrokerClient) {
+  publish (msg: Partial<PublishMessage> & Pick<PublishMessage, 'topic' | 'payload'>, client?: BrokerClient): boolean {
     let topic: string = msg.topic as string, reasonCode = 0, retain = msg.retain
 
     // if client is intern, can publish qos>0, receive only qos=0
@@ -2115,7 +2124,7 @@ export class Broker extends EventEmitter {
         if (reasonCode)
           this.statistics.publishDropped++
         client.emit('message', { cmd: 'pubrec', messageId: msg.messageId, reasonCode })
-        return
+        return !reasonCode
       }
     }
 
@@ -2190,6 +2199,7 @@ export class Broker extends EventEmitter {
         client.emit('message', { cmd: msg.qos === 2 ? 'pubcomp' : 'puback', messageId: msg.messageId, reasonCode })
       }
     }
+    return !reasonCode
   }
 
   /** subscribe single client topic */
@@ -2260,6 +2270,8 @@ export class Broker extends EventEmitter {
   /** get permissions value */
   // @internal
   private _permission (client: BrokerClient, topic: string, permissionId: string, defaultPermission: boolean = true) {
+    if (client.intern && !client.policy?.permissions)
+      return defaultPermission
     //defaultPermission = typeof defaultPermission === 'undefined' ? true : defaultPermission
     const acl = this.permissions.getOption(topic, permissionId, defaultPermission)
     return client?.policy?.permissions instanceof TopicCollection ? client.policy.permissions.getOption(topic, permissionId, acl) : acl
@@ -2325,7 +2337,7 @@ interface MqttConnectionEvents {
 
 interface MqttConnectionSubscription {
   qos: number;
-  cb?: (messgae: MqttMessage) => void;
+  cb?: (messgae: PublishMessage) => void;
 }
 
 /** MQTT connection */
@@ -2389,7 +2401,7 @@ export class MqttConnection extends EventEmitter {
           if (message.qos === 2)
             this._send({ cmd: 'pubrec', messageId: message.messageId })
 
-          this._subscribtions.iterate(message.topic!, (sub: MqttConnectionSubscription) => (sub.cb?.(message),false))
+          this._subscribtions.iterate(message.topic!, (sub: MqttConnectionSubscription) => (sub.cb?.(message as PublishMessage),false))
           this.emit('publish', message)
           this.emit(`topic:${message.topic}`, message.payload as string | Buffer, message.retain)
           break
