@@ -1,6 +1,6 @@
 /**
  * MQTT Broker/Connection
- * @version 1.2.5
+ * @version 1.2.6
  * @package @radatek/mqtt
  * @copyright Darius Kisonas 2023
  * @license MIT
@@ -10,7 +10,6 @@ import {EventEmitter} from 'events'
 import net from 'net'
 import tls from 'tls'
 import fs from 'fs'
-import { nextTick } from 'process'
 
 const BROKER_VERSION = 'MQTT-Broker'
 
@@ -1131,8 +1130,8 @@ export class BrokerClient extends EventEmitter {
       this.broker?.addStatistics('messagesSent', 1)
       if (msg.cmd === 'publish' && msg.topic) {
         this.broker?.addStatistics('publishSent', 1)
-        this.emit('publish', msg.topic, msg.payload)
-        this.emit('topic:' + msg.topic, msg.payload)
+        this.emit('publish', msg)
+        this.emit('topic:' + msg.topic, msg)
       }
     })
   }
@@ -1416,7 +1415,7 @@ export class MqttBrokerClient extends BrokerClient {
 
         if (!this.auth) {
           this.emit('message', { cmd: 'connack', reasonCode: ERROR_BAD_USERNAME_PASSWORD })
-          nextTick(() => this.close())
+          process.nextTick(() => this.close())
           return
         }
         this.socket?.setTimeout((this.keepAlive || 30000) * 5 / 4)
@@ -1843,9 +1842,9 @@ export class Broker extends EventEmitter {
         this.permissions.add(n, { ...v, id: client.id })
       })
 
-    if (!client.policy.permissions)
+    if (!client.policy.permissions && !client.intern)
       client.policy.permissions = {}
-    if (client.policy?.permissions && !(client.policy.permissions instanceof TopicCollection)) {
+    if (client.policy.permissions && !(client.policy.permissions instanceof TopicCollection)) {
       const col = new TopicCollection<AclPermissions>({ systemFilter: true })
       if (client.prefix)
         col.add(client.prefix + '#', { publish: true, subscribe: true })
@@ -2319,7 +2318,7 @@ interface MqttConnectionEvents {
   connect: () => void
   close: () => void
   disconnect: (reasonCode: number) => void
-  publish: (message: MqttMessage) => void
+  publish: (message: PublishMessage) => void
   error: (err: Error) => void
   [key: `topic:${string}`]: (payload: string | Buffer, retain?: boolean) => void
 }
