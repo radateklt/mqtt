@@ -2517,7 +2517,7 @@ export class MqttConnection extends EventEmitter {
 
   /** Send publish message */
   publish(topic: string, payload: string, qos = 0, retain = false) {
-    const msg: MqttMessage = { topic, payload, qos, retain, messageId: this._messageId++ }
+    const msg: MqttMessage = { cmd: 'publish', topic, payload, qos, retain, messageId: this._messageId++ }
     this._queue.push(msg)
     if (this._state === MqttConnectionState.connected) {
       this._ping()
