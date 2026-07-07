@@ -1948,6 +1948,27 @@ export class Broker extends EventEmitter {
     return this.data.get(topic)
   }
 
+  async wait (topic: string, filter: (msg: PublishMessage) => boolean, timeout: number = 3000): Promise<PublishMessage | void> {
+    const publishFilter = (msg: PublishMessage) => {
+      if (msg.topic === topic && filter(msg)) {
+        clearTimeout(timer)
+        this.off('publish', publishFilter)
+        resolve(msg)
+      }
+    }
+
+    let resolve: any
+    let timer: NodeJS.Timeout = setTimeout(() => {
+      this.off('publish', publishFilter)
+      resolve()
+    }, timeout)
+
+    return new Promise((res, rej) => {
+      resolve = res
+      this.on('publish', publishFilter)
+    })
+  }
+
   /** Update policy */
   setPolicy (policy: { [id: string]: PolicyOptions }) {
     this.options.policy = { ...policy }
